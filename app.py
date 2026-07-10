@@ -1,24 +1,43 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+
 import tensorflow as tf
 import numpy as np
 from PIL import Image
+
 import base64
 import io
 
 
 app = Flask(__name__)
 
-# Enable Flutter Web access
 CORS(app)
 
 
-# Load trained model
-model = tf.keras.models.load_model("best_model.keras")
+# ==============================
+# Load TensorFlow Lite Model
+# ==============================
+
+interpreter = tf.lite.Interpreter(
+    model_path="plant_model.tflite"
+)
+
+interpreter.allocate_tensors()
 
 
-# Disease classes
+input_details = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
+
+
+print("TFLite model loaded")
+
+
+# ==============================
+# Disease Classes
+# ==============================
+
 class_names = [
+
     'corn_blight',
     'corn_common_rust',
     'corn_gray_leaf_spot',
@@ -47,13 +66,24 @@ class_names = [
     'coconut_pest_damage',
     'coconut_yellowing',
     'coconut_leaf_spot'
+
 ]
 
 
+# ==============================
+# Home
+# ==============================
+
 @app.route("/")
 def home():
-    return "Plant Disease API Running"
 
+    return "Plant Disease API Running (TensorFlow Lite)"
+
+
+
+# ==============================
+# Prediction API
+# ==============================
 
 @app.route("/predict", methods=["POST"])
 def predict():
@@ -63,22 +93,25 @@ def predict():
         print("Request received")
 
 
-        # Get JSON data
         data = request.get_json()
 
 
         if not data:
+
             return jsonify({
-                "error": "No data received"
-            }), 400
+                "error":"No data received"
+            }),400
 
 
-        # Get image
+
         image_data = data["image"]
 
 
-        # Get crop
-        crop = data.get("crop", "").lower()
+        crop = data.get(
+            "crop",
+            ""
+        ).lower()
+
 
 
         if crop not in [
@@ -87,19 +120,29 @@ def predict():
             "rice",
             "coconut"
         ]:
+
             return jsonify({
-                "error": "Invalid crop selected"
-            }), 400
+
+                "error":
+                "Invalid crop selected"
+
+            }),400
 
 
 
-        # Remove base64 header if exists
+        # Remove base64 header
+
         if "," in image_data:
+
             image_data = image_data.split(",")[1]
 
 
+
         # Decode image
-        image_bytes = base64.b64decode(image_data)
+
+        image_bytes = base64.b64decode(
+            image_data
+        )
 
 
         img = Image.open(
@@ -110,13 +153,26 @@ def predict():
         print("Image decoded")
 
 
-        # Resize image
-        img = img.resize((224,224))
+
+        # Resize
+
+        img = img.resize(
+            (224,224)
+        )
 
 
-        # Convert to array
-        img_array = np.array(img)
+        img_array = np.array(
+            img
+        )
 
+
+        # Normalize
+
+        img_array = img_array / 255.0
+
+
+
+        # Add batch dimension
 
         img_array = np.expand_dims(
             img_array,
@@ -124,65 +180,98 @@ def predict():
         )
 
 
-        # Normalize
-        img_array = img_array / 255.0
-
-
-
         print("Prediction started")
 
 
-        # AI prediction
-        prediction = model.predict(img_array)[0]
+
+        # ==============================
+        # TensorFlow Lite Prediction
+        # ==============================
+
+
+        interpreter.set_tensor(
+
+            input_details[0]["index"],
+
+            img_array.astype(np.float32)
+
+        )
+
+
+        interpreter.invoke()
+
+
+
+        prediction = interpreter.get_tensor(
+
+            output_details[0]["index"]
+
+        )[0]
+
 
 
         print("Prediction completed")
 
 
 
-        # Select only crop classes
+        # Select crop classes only
 
         allowed_indexes = [
-            i for i, name in enumerate(class_names)
+
+            i for i,name in enumerate(class_names)
+
             if name.startswith(crop)
+
         ]
+
 
 
         crop_scores = prediction[allowed_indexes]
 
 
-        # Normalize confidence
         crop_scores = (
+
             crop_scores /
+
             np.sum(crop_scores)
+
         )
 
 
-        best_position = np.argmax(crop_scores)
+
+        best_position = np.argmax(
+            crop_scores
+        )
 
 
-        final_index = allowed_indexes[best_position]
+        final_index = allowed_indexes[
+            best_position
+        ]
 
 
-        disease = class_names[final_index]
+
+        disease = class_names[
+            final_index
+        ]
+
 
 
         confidence = float(
-            np.max(crop_scores) * 100
+
+            np.max(crop_scores)*100
+
         )
 
 
 
         return jsonify({
 
-            "crop": crop,
+            "crop":crop,
 
-            "disease": disease,
+            "disease":disease,
 
-            "confidence": round(
-                confidence,
-                2
-            )
+            "confidence":
+            round(confidence,2)
 
         })
 
@@ -191,22 +280,32 @@ def predict():
     except Exception as e:
 
 
-        print("ERROR:", e)
+        print("ERROR:",e)
 
 
         return jsonify({
 
-            "error": str(e)
+            "error":str(e)
 
         }),500
 
 
 
 
-if __name__ == "__main__":
+# ==============================
+
+# Run
+
+# ==============================
+
+if __name__=="__main__":
 
     app.run(
+
         host="0.0.0.0",
+
         port=5000,
+
         debug=True
+
     )
